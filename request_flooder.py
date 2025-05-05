@@ -2,7 +2,6 @@
 """
 High-Speed Request Flood Tool with Rate Limit Detection
 Developed by Upendra Khanal
-Enhanced by Claude
 
 A powerful, high-performance HTTP request flood tool optimized for 
 stress testing web applications with high request rates.
