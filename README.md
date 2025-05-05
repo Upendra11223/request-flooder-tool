@@ -25,7 +25,7 @@ A high-performance, asynchronous HTTP flood testing tool written in Python. This
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/yourusername/request-flooder.git
+git clone https://github.com/Upendra11223/request-flooder-tool
 cd request-flooder
 ```
 
