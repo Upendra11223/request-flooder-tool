@@ -31,8 +31,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(f"flood_requests_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
@@ -162,7 +161,7 @@ class FloodController:
     """Controls the request flooding process."""
     def __init__(self, url: str, stats: RequestStats, analyzer: ContentAnalyzer, 
                  timeout: float = DEFAULT_TIMEOUT, proxies: List[str] = None,
-                 user_agent: str = None):
+                 user_agent: str = None, show_title_once: bool = True):
         self.url = url
         self.stats = stats
         self.analyzer = analyzer
@@ -173,6 +172,8 @@ class FloodController:
         self.proxies = proxies or []  # List of proxy URLs
         self.current_proxy_index = 0
         self.titles_shown = set()  # Track titles we've already shown
+        self.show_title_once = show_title_once  # Option to show title only once
+        self.title_displayed = False  # Flag to track if title has been displayed
         # Use a realistic user agent to avoid blocks
         self.user_agent = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
     
@@ -213,11 +214,19 @@ class FloodController:
                         title_match = re.search(r'<title>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
                         if title_match and title_match.group(1):
                             title = title_match.group(1).strip()
-                            if title and title not in self.titles_shown:
+                            
+                            # If show_title_once is True, only display the title once
+                            if self.show_title_once:
+                                if not self.title_displayed:
+                                    print(f"\n[SUCCESS] Website Title: {title}")
+                                    print(f"[SUCCESS] Request completed successfully with status {status}")
+                                    print("[SUCCESS] Connection to target confirmed. Continuing with flood...")
+                                    sys.stdout.flush()
+                                    self.title_displayed = True
+                            # Otherwise display new titles as they're found
+                            elif title and title not in self.titles_shown:
                                 self.titles_shown.add(title)
-                                # Force a new line to make the title display clearer
                                 print(f"\n[SUCCESS] Website Title: {title}")
-                                # Flush stdout to ensure immediate display
                                 sys.stdout.flush()
                     except Exception as e:
                         logger.debug(f"Failed to extract title: {str(e)}")
@@ -469,6 +478,10 @@ async def main_async():
     # Ask for search text (simple option)
     search_text = input("Enter text to search for in responses (optional): ")
     
+    # Show title only once option
+    show_title_once = input("Show website title only once when successful? (y/n, default: y): ")
+    show_title_once = not show_title_once.lower().startswith('n')
+    
     # Show detailed logs option
     show_logs = input("Show detailed logs? (slower) (y/n, default: n): ").lower().startswith('y')
     if not show_logs:
@@ -506,7 +519,8 @@ async def main_async():
         analyzer=analyzer,
         timeout=timeout,
         proxies=proxies,
-        user_agent=user_agent
+        user_agent=user_agent,
+        show_title_once=show_title_once
     )
     
     # Print warning before starting
