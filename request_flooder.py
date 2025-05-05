@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-High-Speed Request Flood Tool
+High-Speed Request Flood Tool with Rate Limit Detection
 Developed by Upendra Khanal
+Enhanced by Claude
 
 A powerful, high-performance HTTP request flood tool optimized for 
 stress testing web applications with high request rates.
+Now includes detection for rate limiting and request blocking.
 """
 
 import asyncio
@@ -41,6 +43,109 @@ DEFAULT_TIMEOUT = 5  # seconds
 DEFAULT_CONNECTIONS = 5000  # reasonable max connections
 DEFAULT_LIMIT_PER_HOST = 0  # unlimited per host
 REQUEST_INTERVAL = 0.01  # delay between batches for stability
+
+
+class RateLimitDetector:
+    """Detects potential rate limiting or request blocking from server responses."""
+    def __init__(self):
+        self.status_counts = {}  # Track status code occurrences
+        self.last_responses = []  # Store last N responses for pattern analysis
+        self.max_stored_responses = 50
+        self.consecutive_failures_threshold = 10
+        self.consecutive_failures = 0
+        self.last_successful_time = time.time()
+        self.potential_rate_limit = False
+        self.rate_limit_warned = False
+        self.lock = asyncio.Lock()
+        
+    async def analyze_response(self, status_code, response_time):
+        """Analyze a response for rate limiting signals."""
+        async with self.lock:
+            # Record status code
+            self.status_counts[status_code] = self.status_counts.get(status_code, 0) + 1
+            
+            # Record response information
+            self.last_responses.append({
+                'status': status_code,
+                'time': response_time,
+                'timestamp': time.time()
+            })
+            
+            # Keep only the last N responses
+            if len(self.last_responses) > self.max_stored_responses:
+                self.last_responses.pop(0)
+            
+            # Check for consecutive failures
+            if 400 <= status_code < 600:
+                self.consecutive_failures += 1
+                if self.consecutive_failures >= self.consecutive_failures_threshold and not self.rate_limit_warned:
+                    print(f"\n[WARNING] Detected {self.consecutive_failures} consecutive failed responses. Possible rate limiting.")
+                    self.rate_limit_warned = True
+                    self.potential_rate_limit = True
+                    return True
+            else:
+                self.consecutive_failures = 0
+                self.last_successful_time = time.time()
+                
+            # Check for 429 Too Many Requests
+            if status_code == 429 and not self.rate_limit_warned:
+                print("\n[WARNING] Received 429 Too Many Requests status. Server is rate limiting requests.")
+                self.rate_limit_warned = True
+                self.potential_rate_limit = True
+                return True
+                
+            # Check response patterns (sudden increase in response time)
+            if len(self.last_responses) >= 10:
+                recent_times = [r['time'] for r in self.last_responses[-10:]]
+                avg_time = sum(recent_times) / len(recent_times)
+                baseline_times = [r['time'] for r in self.last_responses[:10]]
+                baseline_avg = sum(baseline_times) / len(baseline_times) if baseline_times else avg_time
+                
+                # If response time suddenly doubles and stays high
+                if avg_time > baseline_avg * 2 and avg_time > 1.0 and not self.rate_limit_warned:
+                    print(f"\n[WARNING] Average response time increased significantly ({baseline_avg:.2f}s → {avg_time:.2f}s). Possible rate limiting.")
+                    self.rate_limit_warned = True
+                    self.potential_rate_limit = True
+                    return True
+            
+            # Check for blocks (403 Forbidden, 418 I'm a teapot, etc.)
+            if status_code in [403, 418, 503] and self.status_counts.get(status_code, 0) >= 5 and not self.rate_limit_warned:
+                print(f"\n[WARNING] Received multiple {status_code} responses. Server may be blocking requests.")
+                self.rate_limit_warned = True
+                self.potential_rate_limit = True
+                return True
+                
+            return False
+    
+    def get_summary(self):
+        """Return a summary of detected patterns."""
+        if not self.potential_rate_limit:
+            return None
+            
+        summary = []
+        if self.consecutive_failures >= self.consecutive_failures_threshold:
+            summary.append(f"- {self.consecutive_failures} consecutive failed requests")
+        
+        if 429 in self.status_counts:
+            summary.append(f"- {self.status_counts[429]} '429 Too Many Requests' responses")
+            
+        if 403 in self.status_counts:
+            summary.append(f"- {self.status_counts[403]} '403 Forbidden' responses")
+            
+        if 503 in self.status_counts:
+            summary.append(f"- {self.status_counts[503]} '503 Service Unavailable' responses")
+            
+        # Add response time analysis
+        if len(self.last_responses) >= 10:
+            recent_times = [r['time'] for r in self.last_responses[-10:]]
+            avg_time = sum(recent_times) / len(recent_times)
+            baseline_times = [r['time'] for r in self.last_responses[:10]]
+            baseline_avg = sum(baseline_times) / len(baseline_times) if baseline_times else avg_time
+            
+            if avg_time > baseline_avg * 1.5:
+                summary.append(f"- Response time increased from {baseline_avg:.2f}s to {avg_time:.2f}s")
+        
+        return "\n".join(summary) if summary else None
 
 
 class RequestStats:
@@ -161,7 +266,8 @@ class FloodController:
     """Controls the request flooding process."""
     def __init__(self, url: str, stats: RequestStats, analyzer: ContentAnalyzer, 
                  timeout: float = DEFAULT_TIMEOUT, proxies: List[str] = None,
-                 user_agent: str = None, show_title_once: bool = True):
+                 user_agent: str = None, show_title_once: bool = True,
+                 request_delay: float = 0):
         self.url = url
         self.stats = stats
         self.analyzer = analyzer
@@ -174,8 +280,13 @@ class FloodController:
         self.titles_shown = set()  # Track titles we've already shown
         self.show_title_once = show_title_once  # Option to show title only once
         self.title_displayed = False  # Flag to track if title has been displayed
+        self.request_delay = request_delay  # Delay between individual requests
         # Use a realistic user agent to avoid blocks
         self.user_agent = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        
+        # Add rate limit detector
+        self.rate_limit_detector = RateLimitDetector()
+        self.pause_on_rate_limit = True  # Whether to pause when rate limiting is detected
     
     async def _send_single_request(self, session: aiohttp.ClientSession, req_id: int) -> None:
         """Send a single request and extract information."""
@@ -184,6 +295,10 @@ class FloodController:
         if self.proxies:
             proxy = self.proxies[self.current_proxy_index]
             self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxies)
+        
+        # Add the delay if configured
+        if self.request_delay > 0:
+            await asyncio.sleep(self.request_delay)
             
         try:
             start = time.time()
@@ -205,6 +320,14 @@ class FloodController:
                 headers=headers
             ) as response:
                 status = response.status
+                duration = time.time() - start
+                
+                # Check for rate limiting
+                is_rate_limited = await self.rate_limit_detector.analyze_response(status, duration)
+                if is_rate_limited and self.pause_on_rate_limit:
+                    print("\n[ACTION] Pausing requests for 5 seconds to avoid triggering more rate limits...")
+                    await asyncio.sleep(5)
+                    print("Resuming with reduced request rate...")
                 
                 # Always attempt to get title for successful requests
                 if 200 <= status < 300:
@@ -231,11 +354,12 @@ class FloodController:
                     except Exception as e:
                         logger.debug(f"Failed to extract title: {str(e)}")
             
-            duration = time.time() - start
             await self.stats.increment_success(duration)
             
         except asyncio.TimeoutError:
             logger.debug(f"Request {req_id} timed out")
+            # Mark timeouts for rate limit detection too
+            await self.rate_limit_detector.analyze_response(0, self.timeout.total)
             await self.stats.increment_failed()
         except aiohttp.ClientError as e:
             logger.debug(f"Request {req_id} failed with client error: {str(e)}")
@@ -283,6 +407,9 @@ class FloodController:
         print(f"Starting flood with {concurrency} concurrent connections")
         print(f"Processing in batches of {batch_size}")
         print(f"Proxies: {'Enabled (' + str(len(self.proxies)) + ' proxies)' if self.proxies else 'Disabled'}")
+        print(f"Request delay: {self.request_delay}s per request")
+        print("Rate limit detection: Enabled")
+        print(f"Pause on rate limit: {'Enabled' if self.pause_on_rate_limit else 'Disabled'}")
         print("Website titles will be displayed when successful connections are made")
         print("Press Ctrl+C to stop\n")
         
@@ -405,6 +532,17 @@ class FloodController:
         print(f"Average response time: {final_stats['avg_time']}s")
         print(f"Effective requests per second: {final_stats['requests_per_second']}")
         print(f"Peak requests per second: {final_stats['peak_rps']}")
+        
+        # Add rate limiting summary if detected
+        rate_limit_summary = self.rate_limit_detector.get_summary()
+        if rate_limit_summary:
+            print("\nRate Limiting Detection Results:")
+            print(rate_limit_summary)
+            print("\nThe target website appears to have rate limiting or request blocking mechanisms.")
+            print("Consider reducing concurrency or adding delays between requests.")
+        else:
+            print("\nNo rate limiting detected during this session.")
+            
         print("="*60)
 
 
@@ -412,8 +550,9 @@ async def main_async():
     """Main asynchronous function to handle the request flood process."""
     # Display banner for the tool
     print("\n" + "="*60)
-    print("⚡ HIGH-SPEED REQUEST FLOOD TOOL ⚡")
+    print("⚡ HIGH-SPEED REQUEST FLOOD TOOL WITH RATE LIMIT DETECTION ⚡")
     print("Developed by Upendra Khanal")
+    print("Enhanced with rate limit detection")
     print("="*60)
     if USING_UVLOOP:
         print("✅ uvloop detected and enabled for maximum performance!")
@@ -482,6 +621,22 @@ async def main_async():
     show_title_once = input("Show website title only once when successful? (y/n, default: y): ")
     show_title_once = not show_title_once.lower().startswith('n')
     
+    # Add request delay option
+    add_delay = input("Add delay between individual requests to bypass rate limits? (y/n, default: n): ")
+    request_delay = 0
+    
+    if add_delay.lower().startswith('y'):
+        delay_input = input("Enter delay in seconds (e.g., 0.1 for 100ms): ")
+        try:
+            request_delay = float(delay_input)
+        except ValueError:
+            print("Invalid delay, using no delay")
+            request_delay = 0
+    
+    # Ask about rate limit detection behavior
+    pause_option = input("Pause temporarily when rate limiting is detected? (y/n, default: y): ")
+    pause_on_rate_limit = not pause_option.lower().startswith('n')
+    
     # Show detailed logs option
     show_logs = input("Show detailed logs? (slower) (y/n, default: n): ").lower().startswith('y')
     if not show_logs:
@@ -520,13 +675,18 @@ async def main_async():
         timeout=timeout,
         proxies=proxies,
         user_agent=user_agent,
-        show_title_once=show_title_once
+        show_title_once=show_title_once,
+        request_delay=request_delay
     )
+    
+    # Set rate limit pause behavior
+    controller.pause_on_rate_limit = pause_on_rate_limit
     
     # Print warning before starting
     print("\nWARNING: This tool will send a large number of requests very quickly.")
     print("Make sure you have permission to test the target system.")
     print("The tool will display website title when a successful connection is made.")
+    print("Rate limit detection is enabled and will warn you if the server appears to be limiting requests.")
     print("Press Ctrl+C at any time to stop.\n")
     input("Press Enter to start...")
     
@@ -582,8 +742,9 @@ if __name__ == "__main__":
     logging.getLogger("asyncio").setLevel(logging.CRITICAL)
     logging.getLogger("aiohttp").setLevel(logging.CRITICAL)
     
-    print("\n⚡ HIGH-SPEED REQUEST FLOOD TOOL v2.0 ⚡")
+    print("\n⚡ HIGH-SPEED REQUEST FLOOD TOOL WITH RATE LIMIT DETECTION v2.1 ⚡")
     print("Developed by Upendra Khanal")
+    print("Enhanced with rate limit detection")
     print("Use responsibly and only on systems you have permission to test.\n")
     
     try:
