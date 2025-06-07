@@ -1,0 +1,10 @@
+name: network-tester
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - aiohttp>=3.8.0
+    - uvloop>=0.17.0 ; sys_platform != 'win32'
