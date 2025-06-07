@@ -1,108 +1,43 @@
-# ⚡ High-Speed Request Flood Tool
- 
-### Developed by **Upendra Khanal**
+# ⚡ Network Tester
 
-A high-performance, asynchronous HTTP flood testing tool written in Python. This tool is designed for **stress testing websites and web applications** by sending a large volume of requests, measuring response stats, and optionally analyzing the content of responses (like extracting page titles).
+**Developed by Upendra Khanal**
 
-> ⚠️ **Disclaimer**: This tool is intended **only for educational and authorized testing purposes**. Do **not** use it on systems you do not own or have explicit permission to test. Misuse may result in legal consequences.
+High-performance network testing tool for stress testing and security analysis.
 
----
+## 🚀 Quick Start
 
-## 🚀 Features
+1. **Download or clone this repository**
+2. **Install dependencies:**
+   ```bash
+   python3 install.py
+   ```
+3. **Run the tool:**
+   ```bash
+   python3 request_flooder.py
+   ```
 
-- 🔁 High-speed asynchronous request flooder using `aiohttp` and optionally `uvloop`
-- 📊 Live statistics panel: request count, success rate, RPS, peak RPS
-- 📋 Extracts and displays website title upon successful requests
-- ⚙️ Fully configurable: concurrency, batch size, timeouts, user-agent, etc.
-- 🌍 Proxy support (rotate proxies per request)
-- 🔍 Pattern/content analyzer with optional keyword search in HTML response
-- 🔐 Optimized for Linux performance (includes optional TCP tuning)
+## 📋 Features
 
----
+- **Layer 7 HTTP/HTTPS attacks** - Web application stress testing
+- **Layer 4 TCP/UDP attacks** - Network layer testing  
+- **Port scanning** - Network reconnaissance
+- **Proxy support** - Route traffic through proxy servers
+- **Real-time statistics** - Live monitoring of attack progress
 
-## 🛠️ Installation
+## 🎯 Usage
 
-### 1. Clone the repo
+The tool provides an interactive menu:
 
-```bash
-git clone https://github.com/Upendra11223/request-flooder-tool
-cd request-flooder
-```
+1. **Layer 7 (HTTP/HTTPS)** - Test web applications
+2. **Layer 4 TCP** - Test TCP services
+3. **Layer 4 UDP** - Test UDP services  
+4. **Port Scanner** - Discover open ports
 
-### 2. Install dependencies
+## ⚠️ Legal Notice
 
-```bash
-pip install -r requirements.txt
-```
-
-### 3. (Optional) Speed boost on Linux/macOS
-
-```bash
-pip install uvloop
-```
-
----
+**For educational and authorized testing only.** Only use on systems you own or have explicit permission to test.
 
 ## 📦 Requirements
 
-Your `requirements.txt` should include:
-
-```txt
-aiohttp
-uvloop ; sys_platform != 'win32'
-```
-
----
-
-## 💻 Usage
-
-Run the script:
-
-```bash
-python request_flooder.py
-```
-
-Then follow the interactive prompts:
-
-- Enter target URL
-- Number of requests to send
-- Concurrency level (parallel connections)
-- Custom timeout, user-agent, proxy list, etc.
-
----
-
-## 🧪 Example
-
-```bash
-python request_flooder.py
-# Sample session:
-# Enter target URL: https://example.com
-# Enter number of requests to send: 5000
-# Enter concurrency level: 300
-```
-
----
-
-## 📁 Proxy Format
-
-If you use proxies, provide a text file with one proxy per line:
-
-```
-http://ip:port
-socks5://ip:port
-```
-
----
-
-## 📌 Additional Notes
-
-- Uses non-blocking `asyncio` for high performance.
-- You can press `Ctrl+C` anytime to stop the flood.
-- The first request is used to test connectivity and print the website title.
-
----
-
-## 👤 Author
-
-**Upendra Khanal**  
-Feel free to reach out or contribute ideas for improvement!
+- Python 3.7+
+- aiohttp library (auto-installed)

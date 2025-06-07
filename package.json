@@ -2,13 +2,11 @@
   "name": "network-tester",
   "version": "1.0.0",
   "description": "High-Performance Network Testing Tool",
-  "main": "index.js",
   "scripts": {
-    "install-python-deps": "python3 -m pip install --user aiohttp",
-    "test": "python3 request_flooder.py --help || echo 'Tool ready to use'",
-    "start": "python3 request_flooder.py"
+    "start": "python3 request_flooder.py",
+    "install": "python3 install.py"
   },
-  "keywords": ["network", "testing", "performance", "flood"],
+  "keywords": ["network", "testing", "security"],
   "author": "Upendra Khanal",
   "license": "MIT"
 }
