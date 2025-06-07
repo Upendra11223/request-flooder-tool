@@ -37,7 +37,8 @@ class NetworkTester:
             'start_time': 0,
             'peak_rps': 0,
             'current_rps': 0,
-            'last_update': 0
+            'last_update': 0,
+            'last_print': 0
         }
         self.running = True
         self.proxies = []
@@ -232,11 +233,19 @@ class NetworkTester:
                     self.stats['peak_rps'] = self.stats['current_rps']
             self.stats['last_update'] = current_time
 
-    def print_stats(self):
-        """Print current statistics"""
-        elapsed = time.time() - self.stats['start_time']
+    def print_stats(self, force: bool = False):
+        """Print current statistics with rate limiting"""
+        current_time = time.time()
+        
+        # Only print every 0.5 seconds to avoid spam
+        if not force and current_time - self.stats['last_print'] < 0.5:
+            return
+            
+        self.stats['last_print'] = current_time
+        elapsed = current_time - self.stats['start_time']
         success_rate = (self.stats['successful_requests'] / max(1, self.stats['total_requests'])) * 100
         
+        # Clear the line and print stats
         print(f"\r📊 Requests: {self.stats['total_requests']} | "
               f"✅ Success: {self.stats['successful_requests']} | "
               f"❌ Failed: {self.stats['failed_requests']} | "
@@ -310,22 +319,31 @@ class NetworkTester:
         connector = aiohttp.TCPConnector(limit=concurrency * 2, limit_per_host=concurrency)
         
         async with aiohttp.ClientSession(timeout=timeout_config, connector=connector) as session:
-            # Create tasks
-            tasks = []
-            for i in range(num_requests):
+            # Create tasks in batches to avoid memory issues
+            batch_size = min(1000, concurrency * 10)
+            
+            for batch_start in range(0, num_requests, batch_size):
                 if not self.running:
                     break
-                task = asyncio.create_task(make_request(session, i))
-                tasks.append(task)
+                    
+                batch_end = min(batch_start + batch_size, num_requests)
+                tasks = []
                 
-                # Print stats every 100 requests
-                if i % 100 == 0:
-                    self.print_stats()
-                    await asyncio.sleep(0.01)  # Small delay to prevent overwhelming
-            
-            # Wait for all tasks to complete
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+                for i in range(batch_start, batch_end):
+                    if not self.running:
+                        break
+                    task = asyncio.create_task(make_request(session, i))
+                    tasks.append(task)
+                
+                # Wait for batch to complete
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Print stats after each batch
+                self.print_stats()
+                
+                # Small delay between batches
+                await asyncio.sleep(0.1)
 
         print(f"\n✅ Layer 7 attack completed!")
 
@@ -365,21 +383,31 @@ class NetworkTester:
                 except Exception:
                     self.update_stats(False)
 
-        # Create tasks
-        tasks = []
-        for i in range(num_connections):
+        # Create tasks in batches
+        batch_size = min(500, concurrency * 5)
+        
+        for batch_start in range(0, num_connections, batch_size):
             if not self.running:
                 break
-            task = asyncio.create_task(tcp_connect(i))
-            tasks.append(task)
+                
+            batch_end = min(batch_start + batch_size, num_connections)
+            tasks = []
             
-            if i % 100 == 0:
-                self.print_stats()
-                await asyncio.sleep(0.01)
-        
-        # Wait for all tasks
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            for i in range(batch_start, batch_end):
+                if not self.running:
+                    break
+                task = asyncio.create_task(tcp_connect(i))
+                tasks.append(task)
+            
+            # Wait for batch to complete
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Print stats after each batch
+            self.print_stats()
+            
+            # Small delay between batches
+            await asyncio.sleep(0.1)
             
         print(f"\n✅ Layer 4 TCP attack completed!")
 
@@ -414,21 +442,31 @@ class NetworkTester:
                 except Exception:
                     self.update_stats(False)
 
-        # Create tasks
-        tasks = []
-        for i in range(num_packets):
+        # Create tasks in batches
+        batch_size = min(1000, concurrency * 10)
+        
+        for batch_start in range(0, num_packets, batch_size):
             if not self.running:
                 break
-            task = asyncio.create_task(send_udp_packet(i))
-            tasks.append(task)
+                
+            batch_end = min(batch_start + batch_size, num_packets)
+            tasks = []
             
-            if i % 100 == 0:
-                self.print_stats()
-                await asyncio.sleep(0.01)
-        
-        # Wait for all tasks
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            for i in range(batch_start, batch_end):
+                if not self.running:
+                    break
+                task = asyncio.create_task(send_udp_packet(i))
+                tasks.append(task)
+            
+            # Wait for batch to complete
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Print stats after each batch
+            self.print_stats()
+            
+            # Small delay between batches
+            await asyncio.sleep(0.1)
             
         print(f"\n✅ Layer 4 UDP attack completed!")
 
@@ -621,7 +659,7 @@ def main():
     
     # Final stats
     if tester.stats['total_requests'] > 0:
-        print(f"\n📈 Final Statistics:")
+        print(f"\n\n📈 Final Statistics:")
         print(f"   Total Requests/Connections: {tester.stats['total_requests']}")
         print(f"   Successful: {tester.stats['successful_requests']}")
         print(f"   Failed: {tester.stats['failed_requests']}")
@@ -630,6 +668,18 @@ def main():
         print(f"   Peak RPS: {tester.stats['peak_rps']:.1f}")
         elapsed = time.time() - tester.stats['start_time']
         print(f"   Total Time: {elapsed:.1f} seconds")
+        
+        # Explain what happened
+        print(f"\n💡 Analysis:")
+        if tester.stats['successful_requests'] > 0:
+            print(f"   ✅ Successfully established {tester.stats['successful_requests']} TCP connections")
+            print(f"   📊 This demonstrates the target server is responding to connection requests")
+            if tester.stats['peak_rps'] > 50:
+                print(f"   🔥 High RPS achieved - effective stress test")
+            else:
+                print(f"   ⚠️ Low RPS - may be limited by network or target server")
+        else:
+            print(f"   ❌ No successful connections - target may be protected or unreachable")
 
 if __name__ == "__main__":
     main()
