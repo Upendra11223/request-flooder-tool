@@ -97,6 +97,25 @@ make down          # stop everything   (make clean = also remove images/volumes)
 4. Read `docs/concepts.md` to understand *why*, and why a distributed attack
    would defeat the simple per-IP limit.
 
+### Point it at your own local server
+
+The generator accepts a target as a **URL**, `host:port`, or a bare **IP** — so
+you can stress a server running on your own machine or LAN:
+
+```bash
+# a local dev server, by URL (port + path taken from the URL)
+docker compose run --rm generator http-flood --target http://192.168.1.50:3000/api --duration 20 --concurrency 100
+# by IP + explicit port
+docker compose run --rm generator http-flood --target 192.168.1.50 --port 8000 --duration 20 --concurrency 100
+# TCP / UDP by IP
+docker compose run --rm generator tcp-flood --target 10.0.0.5:22 --duration 15 --concurrency 200
+docker compose run --rm generator udp-flood --target 10.0.0.5 --port 5000 --duration 15 --concurrency 60
+```
+
+> The target **must be a local/private address** (RFC1918 / loopback /
+> link-local / unique-local). A public URL or IP is refused — see below. Only
+> test servers you own; even on your own LAN, don't flood a host others depend on.
+
 ---
 
 ## 🔒 Safety by design
@@ -106,10 +125,11 @@ This lab is built so it can only ever hit itself:
 1. **No internet route.** The `attacknet` Docker network is declared
    `internal: true`. Containers on it (generator, victim, defense) have no
    gateway to the outside world. Packets cannot leave the host.
-2. **Public-IP refusal.** `generator.py` resolves its target and **exits** if
-   any resolved address is public. It only accepts private (RFC1918), loopback,
-   or link-local targets. Lifting the script out of the lab to point it at a
-   real site fails by design.
+2. **Public-IP refusal.** `generator.py` resolves its target — however it's
+   spelled (URL, `host:port`, or IP) — and **exits** if any resolved address is
+   public (`is_global`). It only accepts private (RFC1918), loopback,
+   link-local, or unique-local targets. Lifting the script out of the lab to
+   point it at a real site fails by design.
 3. **No amplification payloads.** The generator sends generic filler bytes. It
    deliberately does *not* craft DNS/NTP/SNMP/SSDP reflection payloads — those
    have no learning value and exist only to harm third parties.
