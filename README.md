@@ -1,43 +1,164 @@
-# ⚡ Network Tester
+# 🛡️ DDoS Lab — a contained lab for *learning* DoS/DDoS and its defenses
 
-**Developed by Upendra Khanal**
+A hands-on, self-contained lab for understanding how Layer 4 and Layer 7
+denial-of-service attacks overwhelm a service — and, just as importantly, how
+defenses absorb them. You run a flood against a tiny **victim service that lives
+only inside the lab**, watch it degrade on a live dashboard, then run the same
+flood through a **defense layer** and watch it stay healthy.
 
-High-performance network testing tool for stress testing and security analysis.
+> **This lab cannot attack anyone.** The traffic generator runs on an internal
+> Docker network with no route to the internet, and it *refuses to run against
+> any public IP address* (see [Safety by design](#-safety-by-design)). It is a
+> teaching instrument, not an attack tool.
 
-## 🚀 Quick Start
+---
 
-1. **Download or clone this repository**
-2. **Install dependencies:**
-   ```bash
-   python3 install.py
-   ```
-3. **Run the tool:**
-   ```bash
-   python3 request_flooder.py
-   ```
+## 🎯 What you'll actually learn
 
-## 📋 Features
+Running a flooder at a live website teaches you nothing except "packets go out"
+— and it's a crime. Real understanding comes from watching **why** a service
+falls over and **how** it's protected. This lab shows you:
 
-- **Layer 7 HTTP/HTTPS attacks** - Web application stress testing
-- **Layer 4 TCP/UDP attacks** - Network layer testing  
-- **Port scanning** - Network reconnaissance
-- **Proxy support** - Route traffic through proxy servers
-- **Real-time statistics** - Live monitoring of attack progress
+- The difference between **Layer 7** (application, e.g. HTTP) and **Layer 4**
+  (transport, e.g. TCP/UDP) resource exhaustion.
+- **Worker-pool exhaustion**, **connection-table exhaustion**, and **packet
+  processing budgets** — the three ways the victim runs out of resources.
+- How a **reverse-proxy rate limiter** (nginx) sheds a single-source flood, and
+  why a *distributed* attack is harder to stop.
+- How to read the signals defenders actually watch: request rate, rejection
+  rate, in-flight concurrency, connection counts, drop rate.
 
-## 🎯 Usage
+Deep-dive theory lives in **[`docs/concepts.md`](docs/concepts.md)**.
 
-The tool provides an interactive menu:
+---
 
-1. **Layer 7 (HTTP/HTTPS)** - Test web applications
-2. **Layer 4 TCP** - Test TCP services
-3. **Layer 4 UDP** - Test UDP services  
-4. **Port Scanner** - Discover open ports
+## 🧱 Architecture
 
-## ⚠️ Legal Notice
+```
+                 mgmtnet (bridge, to your browser)
+                        │  :9090 dashboard + /metrics
+                        ▼
+   ┌───────────┐   ┌─────────────────────────────┐
+   │ generator │──▶│           victim            │
+   │  (L4/L7)  │   │  :8080 HTTP  (worker pool)  │
+   └───────────┘   │  :8082 TCP   (conn table)   │
+        │          │  :8081 UDP   (proc budget)  │
+        │ or       │  :9090 admin (always up)    │
+        ▼          └─────────────────────────────┘
+   ┌───────────┐            ▲
+   │  defense  │────────────┘  proxy_pass (rate + conn limits)
+   │  (nginx)  │
+   └───────────┘
+        └──────── attacknet (internal: true — NO internet) ────────┘
+```
 
-**For educational and authorized testing only.** Only use on systems you own or have explicit permission to test.
+- **victim** — a small instrumented target. Limits are intentionally tiny so it
+  saturates under safe, modest load. Serves a live dashboard on `:9090`.
+- **defense** — nginx reverse proxy with `limit_req` / `limit_conn`.
+- **generator** — on-demand load generator, internal network only, public-IP
+  refusal built in.
 
-## 📦 Requirements
+---
 
-- Python 3.7+
-- aiohttp library (auto-installed)
+## 🚀 Quick start
+
+Requires **Docker** and **Docker Compose v2**.
+
+```bash
+make up            # build + start victim and defense
+# open the dashboard:
+make dashboard     # -> http://localhost:9090
+```
+
+Then, in another terminal, run a scenario and watch the dashboard react:
+
+```bash
+make flood-http            # L7 flood, hits the victim DIRECTLY  -> goes RED
+make reset                 # zero the counters between runs
+make flood-http-defended   # same flood THROUGH nginx           -> stays GREEN
+```
+
+More scenarios:
+
+```bash
+make flood-tcp     # L4 TCP connection-table exhaustion
+make flood-udp     # L4 UDP packet flood (watch the drop rate climb)
+make logs          # tail victim + defense logs
+make down          # stop everything   (make clean = also remove images/volumes)
+```
+
+### The key experiment
+
+1. `make up`, open the dashboard.
+2. `make flood-http` → the HTTP card fills up, latency and **503 rejections**
+   climb, status goes **OVERWHELMED**.
+3. `make reset`, then `make flood-http-defended` → nginx sheds the excess at the
+   edge, the victim's worker pool barely moves, status stays **HEALTHY**.
+4. Read `docs/concepts.md` to understand *why*, and why a distributed attack
+   would defeat the simple per-IP limit.
+
+### Point it at your own local server
+
+The generator accepts a target as a **URL**, `host:port`, or a bare **IP** — so
+you can stress a server running on your own machine or LAN:
+
+```bash
+# a local dev server, by URL (port + path taken from the URL)
+docker compose run --rm generator http-flood --target http://192.168.1.50:3000/api --duration 20 --concurrency 100
+# by IP + explicit port
+docker compose run --rm generator http-flood --target 192.168.1.50 --port 8000 --duration 20 --concurrency 100
+# TCP / UDP by IP
+docker compose run --rm generator tcp-flood --target 10.0.0.5:22 --duration 15 --concurrency 200
+docker compose run --rm generator udp-flood --target 10.0.0.5 --port 5000 --duration 15 --concurrency 60
+```
+
+> The target **must be a local/private address** (RFC1918 / loopback /
+> link-local / unique-local). A public URL or IP is refused — see below. Only
+> test servers you own; even on your own LAN, don't flood a host others depend on.
+
+---
+
+## 🔒 Safety by design
+
+This lab is built so it can only ever hit itself:
+
+1. **No internet route.** The `attacknet` Docker network is declared
+   `internal: true`. Containers on it (generator, victim, defense) have no
+   gateway to the outside world. Packets cannot leave the host.
+2. **Public-IP refusal.** `generator.py` resolves its target — however it's
+   spelled (URL, `host:port`, or IP) — and **exits** if any resolved address is
+   public (`is_global`). It only accepts private (RFC1918), loopback,
+   link-local, or unique-local targets. Lifting the script out of the lab to
+   point it at a real site fails by design.
+3. **No amplification payloads.** The generator sends generic filler bytes. It
+   deliberately does *not* craft DNS/NTP/SNMP/SSDP reflection payloads — those
+   have no learning value and exist only to harm third parties.
+4. **On-demand generator.** The generator never auto-starts; you invoke each run
+   explicitly.
+
+### Legal note
+
+Running real DoS/DDoS traffic against systems you don't own is a crime in
+essentially every jurisdiction (e.g. US CFAA, UK Computer Misuse Act, Nepal's
+Electronic Transactions Act). Practice offense only in environments built for it
+— this lab, your own isolated VMs, or platforms like HackTheBox / TryHackMe.
+
+---
+
+## 📁 Layout
+
+```
+docker-compose.yml     # orchestration + the internal/no-egress network
+Makefile               # make up / flood-* / reset / down
+victim/                # instrumented target + live dashboard (stdlib Python)
+generator/             # load generator with public-IP refusal (stdlib Python)
+defense/               # nginx reverse proxy with rate + connection limits
+docs/concepts.md       # the theory: L4 vs L7, exhaustion modes, mitigations
+```
+
+## 🧩 Extend it
+
+Good next exercises (see `docs/concepts.md` for pointers): add a Slowloris-style
+slow-header scenario; add `limit_conn` visualisation from nginx `stub_status`;
+simulate a *distributed* source with multiple generator replicas to show why
+per-IP limits alone aren't enough; add a SYN-flood discussion with `tc`/`iptables`.
