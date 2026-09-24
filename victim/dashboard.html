@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DDoS Lab Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #1a1d27; --panel2: #212534; --text: #e6e9ef;
+    --muted: #8b93a7; --line: #2c3143; --accent: #4da3ff;
+    --ok: #35c46a; --warn: #f2b544; --bad: #f2545b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { padding: 18px 20px; border-bottom: 1px solid var(--line); display: flex;
+    align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .status { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 15px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); }
+  .status.healthy .dot { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+  .status.degraded .dot { background: var(--warn); box-shadow: 0 0 10px var(--warn); }
+  .status.overwhelmed .dot { background: var(--bad); box-shadow: 0 0 10px var(--bad); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px; padding: 20px; max-width: 1200px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card h2 { font-size: 14px; margin: 0 0 12px; color: var(--accent); letter-spacing: .3px; }
+  .layer { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
+  .stat-row { display: flex; justify-content: space-between; padding: 5px 0;
+    font-size: 13px; border-bottom: 1px dashed var(--line); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-row .v { font-variant-numeric: tabular-nums; font-weight: 650; }
+  .bar { height: 10px; background: var(--panel2); border-radius: 6px; overflow: hidden; margin: 8px 0 4px; }
+  .bar > span { display: block; height: 100%; width: 0%; background: var(--accent);
+    transition: width .3s ease, background .3s ease; }
+  .barlabel { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
+  canvas { width: 100%; height: 60px; display: block; margin-top: 10px; background: var(--panel2); border-radius: 8px; }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 0 20px 28px; max-width: 1200px; margin: 0 auto; }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>⚡ DDoS Lab — Live Victim Dashboard</h1>
+    <div class="sub">Polling <code>/metrics</code> every 0.5s · contained lab · no live target is ever touched</div>
+  </div>
+  <div id="status" class="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
+</header>
+
+<div class="grid">
+  <div class="card">
+    <div class="layer">Layer 7 · Application</div>
+    <h2>HTTP Service (:8080)</h2>
+    <div class="bar"><span id="http-util-bar"></span></div>
+    <div class="barlabel"><span>worker pool</span><span id="http-util-label">0 / 0</span></div>
+    <div class="stat-row"><span>Requests / sec</span><span class="v" id="http-rps">0</span></div>
+    <div class="stat-row"><span>Rejected / sec (503)</span><span class="v" id="http-reject-rps">0</span></div>
+    <div class="stat-row"><span>Served (total)</span><span class="v" id="http-served">0</span></div>
+    <div class="stat-row"><span>Rejected (total)</span><span class="v" id="http-rejected">0</span></div>
+    <div class="stat-row"><span>Last latency</span><span class="v" id="http-latency">0 ms</span></div>
+    <canvas id="http-spark" width="300" height="60"></canvas>
+  </div>
+
+  <div class="card">
+    <div class="layer">Layer 4 · Transport</div>
+    <h2>TCP Connections (:8082)</h2>
+    <div class="bar"><span id="tcp-util-bar"></span></div>
+    <div class="barlabel"><span>connection table</span><span id="tcp-util-label">0 / 0</span></div>
+    <div class="stat-row"><span>New conns / sec</span><span class="v" id="tcp-cps">0</span></div>
+    <div class="stat-row"><span>Active</span><span class="v" id="tcp-active">0</span></div>
+    <div class="stat-row"><span>Accepted (total)</span><span class="v" id="tcp-total">0</span></div>
+    <div class="stat-row"><span>Refused (total)</span><span class="v" id="tcp-refused">0</span></div>
+  </div>
+
+  <div class="card">
+    <div class="layer">Layer 4 · Transport</div>
+    <h2>UDP Packets (:8081)</h2>
+    <div class="bar"><span id="udp-util-bar"></span></div>
+    <div class="barlabel"><span>processing budget</span><span id="udp-util-label">0 / 0 pps</span></div>
+    <div class="stat-row"><span>Packets / sec</span><span class="v" id="udp-pps">0</span></div>
+    <div class="stat-row"><span>Dropped / sec</span><span class="v" id="udp-drop-rps">0</span></div>
+    <div class="stat-row"><span>Processed (total)</span><span class="v" id="udp-processed">0</span></div>
+    <div class="stat-row"><span>Dropped (total)</span><span class="v" id="udp-dropped">0</span></div>
+    <canvas id="udp-spark" width="300" height="60"></canvas>
+  </div>
+</div>
+
+<footer id="footer">uptime — · Watch a card turn amber then red under load; run the defended scenario and watch it stay green.</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function drawSpark(canvas, series, color, capline) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width, h = canvas.height, pad = 4;
+  ctx.clearRect(0, 0, w, h);
+  if (!series || series.length === 0) return;
+  const max = Math.max(1, ...series, capline || 0);
+  const n = series.length;
+  const stepX = (w - pad * 2) / Math.max(1, n - 1);
+  const y = (v) => h - pad - (v / max) * (h - pad * 2);
+
+  if (capline) {  // dashed capacity line
+    ctx.strokeStyle = "rgba(242,84,91,.5)"; ctx.setLineDash([4, 4]); ctx.beginPath();
+    ctx.moveTo(pad, y(capline)); ctx.lineTo(w - pad, y(capline)); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.beginPath();
+  series.forEach((v, i) => { const px = pad + i * stepX, py = y(v);
+    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); });
+  ctx.lineTo(pad + (n - 1) * stepX, h - pad); ctx.lineTo(pad, h - pad); ctx.closePath();
+  ctx.fillStyle = color + "22"; ctx.fill();
+  ctx.beginPath();
+  series.forEach((v, i) => { const px = pad + i * stepX, py = y(v);
+    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); });
+  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+}
+
+function setBar(barId, labelId, used, cap, label) {
+  const pct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
+  const bar = $(barId);
+  bar.style.width = pct + "%";
+  bar.style.background = pct > 90 ? "var(--bad)" : pct > 60 ? "var(--warn)" : "var(--accent)";
+  $(labelId).textContent = label;
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/metrics", { cache: "no-store" });
+    const m = await r.json();
+
+    const st = $("status"), health = m.health || "healthy";
+    st.className = "status " + health;
+    $("status-text").textContent = health.toUpperCase();
+
+    // Layer 7 HTTP
+    setBar("http-util-bar", "http-util-label", m.http.in_flight, m.config.http_workers,
+           `${m.http.in_flight} / ${m.config.http_workers}`);
+    $("http-rps").textContent = m.http.rps.toFixed(0);
+    $("http-reject-rps").textContent = m.http.reject_rps.toFixed(0);
+    $("http-served").textContent = m.http.served.toLocaleString();
+    $("http-rejected").textContent = m.http.rejected.toLocaleString();
+    $("http-latency").textContent = m.http.last_latency_ms.toFixed(1) + " ms";
+    drawSpark($("http-spark"), m.history.http_rps, "#4da3ff");
+
+    // Layer 4 TCP
+    setBar("tcp-util-bar", "tcp-util-label", m.tcp.active, m.config.tcp_max_conn,
+           `${m.tcp.active} / ${m.config.tcp_max_conn}`);
+    $("tcp-cps").textContent = m.tcp.cps.toFixed(0);
+    $("tcp-active").textContent = m.tcp.active.toLocaleString();
+    $("tcp-total").textContent = m.tcp.total.toLocaleString();
+    $("tcp-refused").textContent = m.tcp.refused.toLocaleString();
+
+    // Layer 4 UDP
+    setBar("udp-util-bar", "udp-util-label", m.udp.pps, m.config.udp_capacity,
+           `${m.udp.pps.toFixed(0)} / ${m.config.udp_capacity} pps`);
+    $("udp-pps").textContent = m.udp.pps.toFixed(0);
+    $("udp-drop-rps").textContent = m.udp.drop_rps.toFixed(0);
+    $("udp-processed").textContent = m.udp.processed.toLocaleString();
+    $("udp-dropped").textContent = m.udp.dropped.toLocaleString();
+    drawSpark($("udp-spark"), m.history.udp_pps, "#35c46a", m.config.udp_capacity);
+
+    $("footer").textContent = `uptime ${m.uptime_s}s · Watch a card turn amber then red under load; `
+      + `run the defended scenario and watch it stay green.`;
+  } catch (e) {
+    $("status").className = "status";
+    $("status-text").textContent = "victim unreachable";
+  }
+}
+setInterval(tick, 500);
+tick();
+</script>
+</body>
+</html>

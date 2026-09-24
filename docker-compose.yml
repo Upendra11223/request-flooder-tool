@@ -1,0 +1,48 @@
+name: ddos-lab
+
+# ---------------------------------------------------------------------------
+# Networks
+#   attacknet : internal:true => NO route to the internet. All attack traffic
+#               (generator -> victim / defense) flows here and cannot leave the
+#               host. This is the primary containment guarantee of the lab.
+#   mgmtnet   : ordinary bridge, used ONLY so the victim can publish its
+#               dashboard/metrics port (9090) to your browser. The generator is
+#               NOT attached to this network.
+# ---------------------------------------------------------------------------
+networks:
+  attacknet:
+    internal: true
+  mgmtnet: {}
+
+services:
+  victim:
+    build: ./victim
+    container_name: ddoslab-victim
+    networks: [attacknet, mgmtnet]
+    ports:
+      - "9090:9090"          # dashboard + /metrics -> http://localhost:9090
+    environment:
+      HTTP_WORKERS: "50"
+      HTTP_WORK_MS: "50"
+      TCP_MAX_CONN: "200"
+      UDP_CAPACITY: "2000"
+    restart: unless-stopped
+
+  defense:
+    image: nginx:1.27-alpine
+    container_name: ddoslab-defense
+    depends_on: [victim]
+    networks: [attacknet]
+    volumes:
+      - ./defense/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+
+  # On-demand only (profile "tools"): started by `docker compose run generator …`,
+  # never by `up`. Attached ONLY to the internal attacknet, so even if you edit
+  # the target it has no path to the internet.
+  generator:
+    build: ./generator
+    networks: [attacknet]
+    environment:
+      PYTHONUNBUFFERED: "1"
+    profiles: ["tools"]
